@@ -17,7 +17,7 @@ from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
 
 
 def modulate(x, shift, scale):
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1) #  scale, shift 都零初始化了，所以用x*(1+..)+.., 能保证起始时，输入x，返回x
 
 
 #################################################################################
@@ -117,6 +117,13 @@ class DiTBlock(nn.Module):
 
     def forward(self, x, c):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
+        '''
+        paper 里说： Rather than directly learn dimensionwise scale and shift parameters γ and β, 
+                     we regress them from the sum of the embedding vectors of t and c.
+        并不是要专门起一个γ/β的回归loss的任务，或者多loss训练，其中一个是γ/β的回归loss。
+        而是说，如果不这样做，那么就是把γ and β 参数化，通过梯度下降学习得到其取值。而regress them的时候，
+        则是基于本函数的input 参数c，对c施加一个神经网络（比如这里采用的Linear层），使得经它处理后的值是γ and β。
+        '''
         x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
@@ -204,15 +211,18 @@ class DiT(nn.Module):
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
+        '''
+        下面即对adaLn的零初始化
+        '''
         # Zero-out adaLN modulation layers in DiT blocks:
-        for block in self.blocks:
+        for block in self.blocks: # type(block) == DitBlock
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
         # Zero-out output layers:
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0) # 对adaLn的零初始化
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
-        nn.init.constant_(self.final_layer.linear.weight, 0)
+        nn.init.constant_(self.final_layer.linear.weight, 0) # 最后一层的0初始化
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
     def unpatchify(self, x):
